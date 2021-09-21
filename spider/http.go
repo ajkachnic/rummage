@@ -7,12 +7,15 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/net/html"
 )
 
-var cache map[string]CrawlResult
+var cache = map[string]bool{}
 var cacheLock sync.Mutex
+
+const TIER_THRESHOLD = 2
 
 // Http(s) crawler
 type HttpSeed struct {
@@ -20,7 +23,8 @@ type HttpSeed struct {
 }
 
 func (seed *HttpSeed) Crawl(tier int, wg *sync.WaitGroup) (CrawlResult, error) {
-	fmt.Println("Crawling " + seed.Url + ", tier " + fmt.Sprint(tier))
+	addToCache(seed.Url, true)
+	log.Println("Crawling " + seed.Url + ", tier " + fmt.Sprint(tier))
 	resp, err := http.Get(seed.Url)
 	if err != nil {
 		return CrawlResult{}, err
@@ -55,7 +59,7 @@ func CrawlHtml(resp *http.Response, tier int, wg *sync.WaitGroup) (CrawlResult, 
 			title = n.FirstChild.Data
 		} else if n.Type == html.ElementNode && n.Data == "a" {
 			href := getAttr("href", n.Attr)
-			if href != "" && tier < 2 {
+			if href != "" && tier < TIER_THRESHOLD {
 				url, err := handleRelativeUrl(resp.Request.URL.String(), href)
 				if err != nil {
 					log.Fatalln(err)
@@ -64,11 +68,10 @@ func CrawlHtml(resp *http.Response, tier int, wg *sync.WaitGroup) (CrawlResult, 
 					seed := HttpSeed{Url: url}
 					seeds = append(seeds, seed)
 				}
-
 			}
 		} else if n.Type == html.ElementNode && n.Data == "meta" {
-			if n.Attr[0].Val == "description" {
-				description = n.Attr[1].Val
+			if getAttr("name", n.Attr) == "description" {
+				description = getAttr("content", n.Attr)
 			}
 		} else if n.Type == html.TextNode {
 			content += n.Data
@@ -81,10 +84,11 @@ func CrawlHtml(resp *http.Response, tier int, wg *sync.WaitGroup) (CrawlResult, 
 
 	f(doc)
 
+	deduppedSeeds := dedup(seeds)
 	crawledSeeds := []CrawlResult{}
 
-	wg.Add(len(seeds))
-	for _, seed := range seeds {
+	wg.Add(len(deduppedSeeds))
+	for _, seed := range deduppedSeeds {
 		if !checkCache(seed.Url) {
 			go func() {
 				res, err := seed.Crawl(tier+1, wg)
@@ -93,9 +97,12 @@ func CrawlHtml(resp *http.Response, tier int, wg *sync.WaitGroup) (CrawlResult, 
 					log.Fatalln(err)
 				}
 				crawledSeeds = append(crawledSeeds, res)
-				addToCache(seed.Url, res)
 				wg.Done()
+				time.Sleep(100) // Pause for a millisecond
 			}()
+			time.Sleep(100) // Pause for a millisecond
+		} else {
+			fmt.Println("found cached url")
 		}
 	}
 
@@ -143,8 +150,24 @@ func checkCache(url string) bool {
 	return ok
 }
 
-func addToCache(url string, res CrawlResult) {
+func addToCache(url string, res bool) {
+	fmt.Println("adding to cache " + url)
 	cacheLock.Lock()
 	defer cacheLock.Unlock()
 	cache[url] = res
+}
+
+func dedup(seeds []HttpSeed) []HttpSeed {
+	occured := map[HttpSeed]bool{}
+	result := []HttpSeed{}
+
+	for _, val := range seeds {
+		if occured[val] != true {
+			occured[val] = true
+
+			result = append(result, val)
+		}
+	}
+
+	return result
 }

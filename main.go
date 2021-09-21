@@ -9,8 +9,8 @@ import (
 
 func main() {
 	var wg sync.WaitGroup
-	// Crawl wikipedia
-	seed := spider.HttpSeed{Url: "https://wikipedia.org"}
+	// Crawl MDN
+	seed := spider.HttpSeed{Url: "https://developer.mozilla.org/en-US/docs/Web"}
 	result, err := seed.Crawl(0, &wg)
 	if err != nil {
 		log.Fatal(err)
